@@ -2,7 +2,7 @@
 import pprint
 import pytest
 import brownie
-from brownie import FetERC20Mock, BridgeMock
+from brownie import FetERC20Mock, Bridge
 from dataclasses import dataclass, InitVar
 from enum import Enum, auto
 from typing import Type, Optional, Any
@@ -111,7 +111,7 @@ class BridgeTest:
     bridge: BridgeSetup = BridgeSetup(token)
     vals: ValuesSetup = ValuesSetup(token)
     t: FetERC20Mock = None
-    b: BridgeMock = None
+    b: Bridge = None
 
 
     def swap(self, user, amount: int = None, dest_addr: str = None):
@@ -147,13 +147,14 @@ class BridgeTest:
                id: int,
                to_user,
                amount: int = None,
+               waive_fee = False,
                relay_eon = None,
                caller = None):
 
         amount = self.vals.amount if amount is None else amount
         relay_eon = self.b.relayEon() if relay_eon is None else relay_eon
         caller = caller or self.users.relayer
-        swapFee = self.b.swapFee()
+        swapFee = 0 if waive_fee else self.b.swapFee()
 
         orig_refunds_fees_accrued = self.b.refundsFeesAccrued()
         orig_bridge_supply = self.b.supply()
@@ -164,7 +165,10 @@ class BridgeTest:
         refunded_amount = amount - effective_fee
 
         #assert self.b.refunds(id) == 0
-        tx = self.b.refund(id, to_user, amount, relay_eon, {'from': caller})
+        if waive_fee:
+            tx = self.b.refundInFull(id, to_user, amount, relay_eon, {'from': caller})
+        else:
+            tx = self.b.refund(id, to_user, amount, relay_eon, {'from': caller})
 
         assert self.b.supply() == orig_bridge_supply - amount
         assert self.b.refundsFeesAccrued() == orig_refunds_fees_accrued + effective_fee
@@ -247,13 +251,13 @@ def tokenFactory(FetERC20Mock, accounts):
 
 
 @pytest.fixture(scope="module", autouse=True)
-def bridgeFactory(BridgeMock, tokenFactory, accounts):
+def bridgeFactory(Bridge, tokenFactory, accounts):
     def bridge_(test: BridgeTest = None) -> BridgeTest:
         test: BridgeTest = tokenFactory(test)
         b = test.bridge
         u = test.users
 
-        contract = BridgeMock.deploy(
+        contract = Bridge.deploy(
             test.t.address,
             b.cap,
             b.upperSwapLimit,
@@ -292,8 +296,8 @@ def bridgeFactory(BridgeMock, tokenFactory, accounts):
 #    s.deleteProtectionPeriod = deleteProtectionPeriod
 #
 #    #@pytest.fixture(scope="module", autouse=True)
-#    #def bridge_(BridgeMock, token, accounts):
-#    #    contract = BridgeMock.deploy(
+#    #def bridge_(Bridge, token, accounts):
+#    #    contract = Bridge.deploy(
 #    #        token.address,
 #    #        s.cap,
 #    #        s.upperSwapLimit,
@@ -399,20 +403,34 @@ def test_refund_amount_smaller_than_fee(bridgeFactory):
     assert e['fee'] == amount
 
 
-def test_swap_reverts_when_bridge_is_paused(bridgeFactory):
-    test = bridgeFactory()
-
+def test_refund_waive_fee(bridgeFactory):
+    test: BridgeTest = bridgeFactory()
     user = test.users.users[0]
-    amount = test.bridge.swapFee
-    # PRECONDITION: shall pass, to prove that the Bridge contract is *not* paused yet
-    n = 10
-    test.b.setBlockNumber(n)
-    test.b.pauseSince(n+1)
-    test.swap(user=user, amount=amount)
+    amount = test.vals.amount
+    swap_tx = test.swap(user=user, amount=amount)
+    assert test.b.supply() == amount
+    assert test.b.swapFee() > 0
+    tx = test.refund(id=swap_tx.events['Swap']['id'], to_user=user, amount=amount, waive_fee=True)
+    assert test.b.supply() == 0
+    e = tx.events[str(EventType.SwapRefund)]
+    assert e['refundedAmount'] == amount
+    assert e['fee'] == 0
 
-    test.b.pauseSince(n)
-    with brownie.reverts(revert_msg="Contract has been paused"):
-        test.b.swap(amount, test.vals.dest_swap_address, {'from': user})
+
+#def test_swap_reverts_when_bridge_is_paused(bridgeFactory):
+#    test = bridgeFactory()
+#
+#    user = test.users.users[0]
+#    amount = test.bridge.swapFee
+#    # PRECONDITION: shall pass, to prove that the Bridge contract is *not* paused yet
+#    n = 10
+#    test.b.setBlockNumber(n)
+#    test.b.pauseSince(n+1)
+#    test.swap(user=user, amount=amount)
+#
+#    test.b.pauseSince(n)
+#    with brownie.reverts(revert_msg="Contract has been paused"):
+#        test.b.swap(amount, test.vals.dest_swap_address, {'from': user})
 
 
 def test_swap_reverts_when_bridge_is_paused_2(bridgeFactory):
