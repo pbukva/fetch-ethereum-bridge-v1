@@ -32,8 +32,10 @@ def main():
         , constructor_params['symbol']
         , constructor_params['initialSupply']
         , constructor_params['decimals_']
-        , {'from': owner})
-        #, {'from': owner, 'gas_price': '20 gwei'})
+        , {'from': owner}
+        , publish_source = True)
+
+    #, {'from': owner, 'gas_price': '20 gwei'})
     
     contract_manif["contract_address"] = contract.address
     contract_manif["deployer_address"] = owner.address

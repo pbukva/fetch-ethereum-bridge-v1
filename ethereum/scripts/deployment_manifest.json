@@ -1,9 +1,9 @@
 {
     "development": {
         "FetERC20Mock": {
-            "deployer_address": "",
-            "deployer_public_key": "",
-            "contract_address": "",
+            "deployer_address": "0xC2e109Affd2FefD5B313350a4B2AdC75EC2e96B1",
+            "deployer_public_key": "0x44dcd1e5e29add8d93c4c0ca6e1ef4b02871481c6b5212cd590cd4b7b5c9350802f213314f6b674c0dd7319cc51ed85d3132be7095bdc2929901ad921fcdf1dc",
+            "contract_address": "0xC9b239c6CE41ba23A53737BC3cf68cf97362B6B9",
             "constructor_parameters": {
                 "name": "Fetch",
                 "symbol": "FET",
@@ -13,7 +13,7 @@
         },
         "Bridge": {
             "deployer_address": "0xC2e109Affd2FefD5B313350a4B2AdC75EC2e96B1",
-            "contract_address": "0xC9b239c6CE41ba23A53737BC3cf68cf97362B6B9",
+            "contract_address": "0x4FA6018F6ED46bf90812F93467982b2899c8C6B1",
             "deployer_public_key": "0x44dcd1e5e29add8d93c4c0ca6e1ef4b02871481c6b5212cd590cd4b7b5c9350802f213314f6b674c0dd7319cc51ed85d3132be7095bdc2929901ad921fcdf1dc",
             "constructor_parameters": {
                 "ERC20Address": "c2e109affd2fefd5b313350a4b2adc75ec2e96b1",
@@ -51,6 +51,33 @@
                 "upperSwapLimit": "1000",
                 "lowerSwapLimit": "100",
                 "swapFee": "100",
+                "pausedSinceBlock": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "deleteProtectionPeriod": "10"
+            }
+        }
+    },
+    "kovan": {
+        "FetERC20Mock": {
+            "deployer_address": "0xC2e109Affd2FefD5B313350a4B2AdC75EC2e96B1",
+            "deployer_public_key": "0x44dcd1e5e29add8d93c4c0ca6e1ef4b02871481c6b5212cd590cd4b7b5c9350802f213314f6b674c0dd7319cc51ed85d3132be7095bdc2929901ad921fcdf1dc",
+            "contract_address": "0xB705AcA752DEb9d8b45fa87ce1ca88d0c760e87B",
+            "constructor_parameters": {
+                "name": "Fetch",
+                "symbol": "FET",
+                "initialSupply": "1152997575000000000000000000",
+                "decimals_": "18"
+            }
+        },
+        "Bridge": {
+            "deployer_address": "0xC2e109Affd2FefD5B313350a4B2AdC75EC2e96B1",
+            "contract_address": "0x4b59576E46f476dAAd0ab2bDb4A07A6135fE3afB",
+            "deployer_public_key": "0x44dcd1e5e29add8d93c4c0ca6e1ef4b02871481c6b5212cd590cd4b7b5c9350802f213314f6b674c0dd7319cc51ed85d3132be7095bdc2929901ad921fcdf1dc",
+            "constructor_parameters": {
+                "ERC20Address": "0xC9b239c6CE41ba23A53737BC3cf68cf97362B6B9",
+                "cap": "1000000000000000000000000",
+                "upperSwapLimit": "1000000000000000000000",
+                "lowerSwapLimit": "100000000000000000000",
+                "swapFee": "50000000000000000000",
                 "pausedSinceBlock": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 "deleteProtectionPeriod": "10"
             }

@@ -41,7 +41,8 @@ def main():
         , constructor_params['swapFee']
         , constructor_params['pausedSinceBlock']
         , constructor_params['deleteProtectionPeriod']
-        , {'from': owner})
+        , {'from': owner}
+        , publish_source=True)
         #, {'from': owner, 'gas_price': '20 gwei'})
 
     contract_manif["contract_address"] = contract.address
