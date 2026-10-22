@@ -9,6 +9,11 @@ nvm install --lts
 nvm use --lts
 ```
 
+> **NOTE(pb):** The `Bridge` contract workflow below still uses the (no longer maintained)
+> eth-brownie framework. The newer `TimeLock` contract lives in its own
+> [Ape framework](https://github.com/ApeWorX/ape) project - see
+> [`timelock/README.md`](timelock/README.md).
+
 ### Install all necessary dependencies:
 
 1. Install correct version of the `ganache-cli` command **LOCALLY** running the following command - point is that

@@ -1,0 +1,18 @@
+# Ape framework project configuration
+# https://docs.apeworx.io/ape/stable/userguides/config.html
+#
+# Dependencies are installed into ~/.ape/packages via `ape pm install`.
+
+dependencies:
+  - name: openzeppelin
+    github: OpenZeppelin/openzeppelin-contracts
+    ref: v5.1.0
+
+solidity:
+  version: 0.8.24
+  # NOTE(pb): `paris` is chosen over the 0.8.24 default (`shanghai`) on purpose,
+  #           to avoid the PUSH0 opcode - keeping the bytecode compatible with
+  #           older chains & tooling.
+  evm_version: paris
+  import_remapping:
+    - "@openzeppelin=openzeppelin/v5.1.0"

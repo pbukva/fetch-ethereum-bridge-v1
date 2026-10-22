@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Ape
+.build/
+*.jsonld
+
+# OS
+.DS_Store

@@ -1,0 +1,13 @@
+{
+    "development": {
+        "constructor_parameters": {
+            "bridge": "",
+            "reverseSwapLockDelay": 10,
+            "refundLockDelay": 20,
+            "nMaxPendingMessages": 10
+        },
+        "submitter_wallet": "",
+        "executor_wallet": "",
+        "canceller_wallet": ""
+    }
+}
