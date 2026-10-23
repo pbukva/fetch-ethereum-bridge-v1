@@ -41,8 +41,9 @@ import "./interfaces/ITimeLock.sol";
  *        (`pausedSinceTimestamp`), since the lock delays are measured in seconds.
  *      - `StateUpdate` with `Option` fields -> `updateState(...)`, where the zero value
  *        of a parameter means "keep the current one".
- *      - Queue nonces start at 1 (not 0) so that 0 can mean "no message" in the index
- *        mappings (`lastReverseSwapNonce` / `lastRefundNonce`).
+ *      - Queue nonces start at 0 (CosmWasm parity); nonces are strictly increasing and
+ *        never reused. The id->nonce index mappings (`reverseSwapIdToNonce` /
+ *        `refundSwapIdToNonce`) store the nonce **+ 1**, so that 0 can mean "no message".
  *      - CosmWasm `ReverseSwapMessages` / `RefundMessages` queries have no O(1) EVM
  *        equivalent - the full history is reconstructable from `MessageSubmitted` events
  *        (indexed nonce + id) off-chain instead.
@@ -66,22 +67,24 @@ contract TimeLock is ITimeLock, AccessControl {
     /// @notice Max number of pending messages; further submits are rejected.
     uint64 public nMaxPendingMessages;
 
-    /// @notice Nonce of the next submitted message (first submitted message gets nonce 1).
+    /// @notice Nonce of the next submitted message (first submitted message gets nonce 0).
     ///         Nonces are strictly increasing and are never reused.
-    uint64 public nextSubmitNonce = 1;
+    uint64 public nextSubmitNonce = 0;
     /// @notice Nonce of the next message eligible for execution (first pending message,
     ///         or `nextSubmitNonce` when the queue is empty).
-    uint64 public nextExecuteNonce = 1;
+    uint64 public nextExecuteNonce = 0;
     /// @notice Number of currently pending messages.
     uint64 public nPendingMessages;
 
     /// @notice The queue: nonce -> message. Use `getMessage(nonce)` to read a full record.
     mapping(uint64 nonce => Message) private _messages;
-    /// @notice rid -> nonce of the last submitted ReverseSwap with that rid (0 = none yet).
-    mapping(uint64 rid => uint64 nonce) public lastReverseSwapNonce;
-    /// @notice id -> nonce of the last submitted Refund/RefundInFull with that id (0 = none yet).
-    ///         Refunds and RefundsInFull share one id space (same as on the CosmWasm side).
-    mapping(uint64 id => uint64 nonce) public lastRefundNonce;
+    /// @notice rid -> (nonce of the last submitted ReverseSwap with that rid) + 1;
+    ///         0 = none submitted yet. Stores nonce + 1 because nonces are 0-based.
+    mapping(uint64 rid => uint64 noncePlusOne) public reverseSwapIdToNonce;
+    /// @notice id -> (nonce of the last submitted Refund/RefundInFull with that id) + 1;
+    ///         0 = none submitted yet. Refunds and RefundsInFull share one id space
+    ///         (same as on the CosmWasm side). Stores nonce + 1 because nonces are 0-based.
+    mapping(uint64 id => uint64 noncePlusOne) public refundSwapIdToNonce;
 
     /// @notice Block timestamp since which the contract is paused
     ///         (`type(uint64).max` = not paused).
@@ -144,7 +147,7 @@ contract TimeLock is ITimeLock, AccessControl {
         uint256 amount,
         uint64 relayEon_
     ) external onlyRole(SUBMIT_ROLE) notPaused {
-        _submit(
+        uint64 noncePlusOne = _submit(
             Message({
                 kind: MsgKind.ReverseSwap,
                 state: ExecutionState.Pending,
@@ -156,9 +159,9 @@ contract TimeLock is ITimeLock, AccessControl {
                 sender: sender,
                 originTxHash: originTxHash
             }),
-            lastReverseSwapNonce[rid]
+            reverseSwapIdToNonce[rid]
         );
-        lastReverseSwapNonce[rid] = nextSubmitNonce - 1;
+        reverseSwapIdToNonce[rid] = noncePlusOne;
     }
 
     /**
@@ -174,7 +177,7 @@ contract TimeLock is ITimeLock, AccessControl {
         uint256 amount,
         uint64 relayEon_
     ) external onlyRole(SUBMIT_ROLE) notPaused {
-        _submit(
+        uint64 noncePlusOne = _submit(
             Message({
                 kind: MsgKind.Refund,
                 state: ExecutionState.Pending,
@@ -186,9 +189,9 @@ contract TimeLock is ITimeLock, AccessControl {
                 sender: "",
                 originTxHash: 0
             }),
-            lastRefundNonce[id]
+            refundSwapIdToNonce[id]
         );
-        lastRefundNonce[id] = nextSubmitNonce - 1;
+        refundSwapIdToNonce[id] = noncePlusOne;
     }
 
     /**
@@ -204,7 +207,7 @@ contract TimeLock is ITimeLock, AccessControl {
         uint256 amount,
         uint64 relayEon_
     ) external onlyRole(SUBMIT_ROLE) notPaused {
-        _submit(
+        uint64 noncePlusOne = _submit(
             Message({
                 kind: MsgKind.RefundInFull,
                 state: ExecutionState.Pending,
@@ -216,9 +219,9 @@ contract TimeLock is ITimeLock, AccessControl {
                 sender: "",
                 originTxHash: 0
             }),
-            lastRefundNonce[id]
+            refundSwapIdToNonce[id]
         );
-        lastRefundNonce[id] = nextSubmitNonce - 1;
+        refundSwapIdToNonce[id] = noncePlusOne;
     }
 
     /**
@@ -299,9 +302,12 @@ contract TimeLock is ITimeLock, AccessControl {
         view
         returns (MessageView[] memory out)
     {
-        // inclusive `nextExecuteNonce` when startAfter is below it, exclusive otherwise
-        // (mirror of the CosmWasm `Bound::inclusive` / `Bound::exclusive` logic)
-        uint64 from = (startAfter >= nextExecuteNonce) ? (startAfter + 1) : nextExecuteNonce;
+        // inclusive `nextExecuteNonce` when startAfter is 0 (no bound) or below it,
+        // exclusive otherwise (mirror of the CosmWasm `Bound::inclusive` / `Bound::exclusive`
+        // logic, with 0 as the EVM adaptation of `Option::None`)
+        uint64 from = (startAfter != 0 && startAfter >= nextExecuteNonce)
+            ? (startAfter + 1)
+            : nextExecuteNonce;
 
         out = new MessageView[](0);
         if (from >= nextSubmitNonce || nPendingMessages == 0) {
@@ -327,11 +333,11 @@ contract TimeLock is ITimeLock, AccessControl {
         view
         returns (MessageView memory)
     {
-        uint64 nonce = lastReverseSwapNonce[rid];
-        if (nonce == 0) {
+        uint64 noncePlusOne = reverseSwapIdToNonce[rid];
+        if (noncePlusOne == 0) {
             return MessageView({ nonce: 0, message: _emptyMessage() });
         }
-        return MessageView({ nonce: nonce, message: _messages[nonce] });
+        return MessageView({ nonce: noncePlusOne - 1, message: _messages[noncePlusOne - 1] });
     }
 
     /// @inheritdoc ITimeLock
@@ -340,11 +346,11 @@ contract TimeLock is ITimeLock, AccessControl {
         view
         returns (MessageView memory)
     {
-        uint64 nonce = lastRefundNonce[id];
-        if (nonce == 0) {
+        uint64 noncePlusOne = refundSwapIdToNonce[id];
+        if (noncePlusOne == 0) {
             return MessageView({ nonce: 0, message: _emptyMessage() });
         }
-        return MessageView({ nonce: nonce, message: _messages[nonce] });
+        return MessageView({ nonce: noncePlusOne - 1, message: _messages[noncePlusOne - 1] });
     }
 
     // -----     INTERNAL: SUBMIT     --------------------------------------------
@@ -358,15 +364,20 @@ contract TimeLock is ITimeLock, AccessControl {
         return uint64(block.timestamp) + delay;
     }
 
-    /// @dev Pushes `m` into the queue. `lastIndexNonce` is the nonce of the last
-    ///      message with the same index (id/rid); 0 means "none submitted yet".
-    ///      Reverts with `MessageAlreadySubmitted` while that message is Pending or
-    ///      Executed (mirror of the CosmWasm `push`).
-    function _submit(Message memory m, uint64 lastIndexNonce) private {
-        if (m.kind != MsgKind.NewRelayEon && lastIndexNonce != 0) {
-            ExecutionState lastState = _messages[lastIndexNonce].state;
+    /// @dev Pushes `m` into the queue and returns the allocated nonce.
+    ///      `lastIndexNoncePlusOne` is the value of the id->nonce index mapping for the
+    ///      message's index (id/rid): the nonce of the last message with that index + 1,
+    ///      or 0 = none submitted yet. Reverts with `MessageAlreadySubmitted` while that
+    ///      message is Pending or Executed (mirror of the CosmWasm `push`).
+    function _submit(Message memory m, uint64 lastIndexNoncePlusOne)
+        private
+        returns (uint64 _submitNoncePlusOne)
+    {
+        if (m.kind != MsgKind.NewRelayEon && lastIndexNoncePlusOne != 0) {
+            uint64 lastNonce = lastIndexNoncePlusOne - 1;
+            ExecutionState lastState = _messages[lastNonce].state;
             if (lastState == ExecutionState.Pending || lastState == ExecutionState.Executed) {
-                revert MessageAlreadySubmitted(lastIndexNonce);
+                revert MessageAlreadySubmitted(lastNonce);
             }
         }
 
@@ -382,6 +393,8 @@ contract TimeLock is ITimeLock, AccessControl {
         nPendingMessages += 1;
 
         emit MessageSubmitted(nonce, m.kind, msg.sender, m.executionTime, m.id);
+
+        return nonce + 1;
     }
 
     /// @dev Pushes the `NewRelayEon` message, bypassing the `nMaxPendingMessages` check

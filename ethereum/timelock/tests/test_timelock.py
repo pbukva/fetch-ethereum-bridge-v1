@@ -154,8 +154,8 @@ class TestInitialization:
         assert timelock.reverseSwapLockDelay() == REVERSE_SWAP_LOCK_DELAY
         assert timelock.refundLockDelay() == REFUND_LOCK_DELAY
         assert timelock.nMaxPendingMessages() == N_MAX_PENDING_MESSAGES
-        assert timelock.nextSubmitNonce() == 1
-        assert timelock.nextExecuteNonce() == 1
+        assert timelock.nextSubmitNonce() == 0
+        assert timelock.nextExecuteNonce() == 0
         assert timelock.nPendingMessages() == 0
         assert timelock.pausedSinceTimestamp() == MAX_UINT64  # not paused
         assert timelock.hasRole(ADMIN_ROLE, owner.address)
@@ -196,13 +196,13 @@ class TestSubmit:
 
     def test_reverse_swap(self, timelock, submitter):
         tx = submit_reverse_swap(timelock, submitter)
-        assert timelock.nextSubmitNonce() == 2
+        assert timelock.nextSubmitNonce() == 1
         assert timelock.nPendingMessages() == 1
-        assert timelock.nextExecuteNonce() == 1
-        assert timelock.lastReverseSwapNonce(1) == 1
+        assert timelock.nextExecuteNonce() == 0
+        assert timelock.reverseSwapIdToNonce(1) == 1  # nonce 0 stored as 0 + 1
 
         assert_message(
-            timelock.getMessage(1),
+            timelock.getMessage(0),
             kind=KIND_REVERSE_SWAP, state=STATE_PENDING,
             execution_time=tx.timestamp + REVERSE_SWAP_LOCK_DELAY,
             relay_eon=0, id=1, amount=100, to=submitter.address,
@@ -210,25 +210,25 @@ class TestSubmit:
         )
 
         evt = event_of(tx, "MessageSubmitted")
-        assert evt["nonce"] == 1
+        assert evt["nonce"] == 0
         assert evt["kind"] == KIND_REVERSE_SWAP
         assert evt["id"] == 1
 
     def test_refund(self, timelock, submitter):
         tx = submit_refund(timelock, submitter)
         assert_message(
-            timelock.getMessage(1),
+            timelock.getMessage(0),
             kind=KIND_REFUND, state=STATE_PENDING,
             execution_time=tx.timestamp + REFUND_LOCK_DELAY,
             relay_eon=0, id=1, amount=100, to=submitter.address,
             sender="", tx_hash=b"\x00" * 32,
         )
-        assert timelock.lastRefundNonce(1) == 1
+        assert timelock.refundSwapIdToNonce(1) == 1  # nonce 0 stored as 0 + 1
 
     def test_refund_in_full(self, timelock, submitter):
         submit_refund_in_full(timelock, submitter)
-        assert timelock.getMessage(1)["kind"] == KIND_REFUND_IN_FULL
-        assert timelock.lastRefundNonce(1) == 1
+        assert timelock.getMessage(0)["kind"] == KIND_REFUND_IN_FULL
+        assert timelock.refundSwapIdToNonce(1) == 1
 
     def test_max_pending_messages(self, timelock, submitter):
         for i in range(N_MAX_PENDING_MESSAGES):
@@ -238,7 +238,7 @@ class TestSubmit:
             submit_reverse_swap(timelock, submitter, rid=99)
 
     def test_duplicate_index_rejected_while_pending(self, timelock, submitter, executor):
-        submit_reverse_swap(timelock, submitter, rid=7)  # nonce 1
+        submit_reverse_swap(timelock, submitter, rid=7)  # nonce 0
 
         with reverts(timelock.MessageAlreadySubmitted):
             submit_reverse_swap(timelock, submitter, rid=7)
@@ -246,8 +246,8 @@ class TestSubmit:
         # still rejected after the message got Executed (mirror of the CosmWasm `push`:
         # resubmission is blocked while the last message is Pending OR Executed)
         travel(REVERSE_SWAP_LOCK_DELAY + 1)
-        timelock.execute(1, sender=executor)
-        assert timelock.getMessage(1)["state"] == STATE_EXECUTED
+        timelock.execute(0, sender=executor)
+        assert timelock.getMessage(0)["state"] == STATE_EXECUTED
         with reverts(timelock.MessageAlreadySubmitted):
             submit_reverse_swap(timelock, submitter, rid=7)
 
@@ -256,7 +256,7 @@ class TestSubmit:
         submit_reverse_swap(timelock, submitter, rid=7)
         bridge_mock.setShouldRevert(True, sender=owner)
         travel(REVERSE_SWAP_LOCK_DELAY + 1)
-        timelock.execute(1, sender=executor)  # fails on the bridge, but the tx succeeds
+        timelock.execute(0, sender=executor)  # fails on the bridge, but the tx succeeds
 
         # the message is Failed, so the index can be resubmitted (same as CosmWasm)
         bridge_mock.setShouldRevert(False, sender=owner)
@@ -284,22 +284,22 @@ class TestExecute:
 
         # premature execution reverts (not mature)
         with reverts(timelock.MessageNotMature):
-            timelock.execute(1, sender=executor)
+            timelock.execute(0, sender=executor)
 
         travel(REVERSE_SWAP_LOCK_DELAY + 1)
 
-        tx = timelock.execute(1, sender=executor)
+        tx = timelock.execute(0, sender=executor)
         assert bridge_mock.nReverseSwaps() == 1
         assert bridge_mock.reverseSwapCalls(0)["rid"] == 1
-        assert timelock.getMessage(1)["state"] == STATE_EXECUTED
+        assert timelock.getMessage(0)["state"] == STATE_EXECUTED
         assert timelock.nPendingMessages() == 0
-        assert timelock.nextExecuteNonce() == 2
-        assert event_of(tx, "MessageExecuted")["nonce"] == 1
+        assert timelock.nextExecuteNonce() == 1
+        assert event_of(tx, "MessageExecuted")["nonce"] == 0
 
     def test_execute_refund(self, timelock, submitter, executor, bridge_mock):
         submit_refund(timelock, submitter, id=5, amount=777)
         travel(REFUND_LOCK_DELAY + 1)
-        timelock.execute(1, sender=executor)
+        timelock.execute(0, sender=executor)
 
         assert bridge_mock.nRefunds() == 1
         call = bridge_mock.refundCalls(0)
@@ -310,7 +310,7 @@ class TestExecute:
     def test_execute_refund_in_full(self, timelock, submitter, executor, bridge_mock):
         submit_refund_in_full(timelock, submitter, id=6, amount=888)
         travel(REFUND_LOCK_DELAY + 1)
-        timelock.execute(1, sender=executor)
+        timelock.execute(0, sender=executor)
 
         assert bridge_mock.nRefunds() == 1
         call = bridge_mock.refundCalls(0)
@@ -319,34 +319,34 @@ class TestExecute:
     def test_execute_reverts_on_wrong_nonce(self, timelock, submitter, executor):
         submit_reverse_swap(timelock, submitter)
         with reverts(timelock.MessageNotNext):
-            timelock.execute(2, sender=executor)
+            timelock.execute(1, sender=executor)
 
     def test_execute_failure_marks_failed(self, timelock, submitter, executor, bridge_mock, owner):
         submit_reverse_swap(timelock, submitter)
         bridge_mock.setShouldRevert(True, sender=owner)
         travel(REVERSE_SWAP_LOCK_DELAY + 1)
 
-        tx = timelock.execute(1, sender=executor)
+        tx = timelock.execute(0, sender=executor)
 
         # the tx SUCCEEDED even though the bridge call failed
-        assert timelock.getMessage(1)["state"] == STATE_FAILED
+        assert timelock.getMessage(0)["state"] == STATE_FAILED
         assert timelock.nPendingMessages() == 0
-        assert timelock.getMessage(1)["state"] == STATE_FAILED
+        assert timelock.getMessage(0)["state"] == STATE_FAILED
 
         evt = event_of(tx, "MessageFailed")
-        assert evt["nonce"] == 1
+        assert evt["nonce"] == 0
         assert len(evt["reason"]) > 0
 
     def test_execute_after_cancel_moves_pointer(self, timelock, submitter, executor, canceller):
-        submit_reverse_swap(timelock, submitter)  # nonce 1
-        submit_refund(timelock, submitter)        # nonce 2
+        submit_reverse_swap(timelock, submitter)  # nonce 0
+        submit_refund(timelock, submitter)        # nonce 1
 
-        timelock.cancel(1, sender=canceller)
+        timelock.cancel(0, sender=canceller)
         travel(REFUND_LOCK_DELAY + 1)
 
-        # nonce 2 is next in order now
-        timelock.execute(2, sender=executor)
-        assert timelock.getMessage(2)["state"] == STATE_EXECUTED
+        # nonce 1 is next in order now
+        timelock.execute(1, sender=executor)
+        assert timelock.getMessage(1)["state"] == STATE_EXECUTED
 
 
 # --------------------------------------------------------------------------------------
@@ -356,27 +356,27 @@ class TestExecute:
 class TestCancel:
 
     def test_cancel_skips_message(self, timelock, submitter, executor, canceller, bridge_mock):
-        submit_reverse_swap(timelock, submitter)  # nonce 1
-        submit_refund(timelock, submitter)        # nonce 2
+        submit_reverse_swap(timelock, submitter)  # nonce 0
+        submit_refund(timelock, submitter)        # nonce 1
 
-        timelock.cancel(1, sender=canceller)
-        assert timelock.getMessage(1)["state"] == STATE_CANCELLED
+        timelock.cancel(0, sender=canceller)
+        assert timelock.getMessage(0)["state"] == STATE_CANCELLED
         assert timelock.nPendingMessages() == 1
-        assert timelock.nextExecuteNonce() == 2  # skipped to the refund
+        assert timelock.nextExecuteNonce() == 1  # skipped to the refund
 
         travel(REFUND_LOCK_DELAY + 1)
-        timelock.execute(2, sender=executor)
+        timelock.execute(1, sender=executor)
         assert bridge_mock.nRefunds() == 1
 
     def test_cancel_reverts_on_not_pending(self, timelock, submitter, canceller):
         submit_reverse_swap(timelock, submitter)
-        timelock.cancel(1, sender=canceller)
+        timelock.cancel(0, sender=canceller)
         with reverts(timelock.MessageNotPending):
-            timelock.cancel(1, sender=canceller)
+            timelock.cancel(0, sender=canceller)
 
     def test_cancel_is_cancel_role_only(self, timelock, nobody):
         with reverts():
-            timelock.cancel(1, sender=nobody)
+            timelock.cancel(0, sender=nobody)
 
 
 # --------------------------------------------------------------------------------------
@@ -386,16 +386,16 @@ class TestCancel:
 class TestNewRelayEon:
 
     def test_new_relay_eon(self, timelock, submitter, bridge_mock):
-        submit_reverse_swap(timelock, submitter)  # nonce 1 - will be cancelled
+        submit_reverse_swap(timelock, submitter)  # nonce 0 - will be cancelled
         timelock.newRelayEon(sender=submitter)
 
-        assert timelock.getMessage(1)["state"] == STATE_CANCELLED
-        assert timelock.getMessage(2)["state"] == STATE_EXECUTED
+        assert timelock.getMessage(0)["state"] == STATE_CANCELLED
+        assert timelock.getMessage(1)["state"] == STATE_EXECUTED
         assert timelock.nPendingMessages() == 0
         assert bridge_mock.nNewRelayEons() == 1
         assert bridge_mock.relayEon() == 0  # MAX_UINT64 + 1 overflows to 0
-        assert timelock.nextExecuteNonce() == 3
-        assert timelock.nextSubmitNonce() == 3
+        assert timelock.nextExecuteNonce() == 2
+        assert timelock.nextSubmitNonce() == 2
 
     def test_new_relay_eon_bypasses_pending_limit(self, timelock, submitter, bridge_mock):
         for i in range(N_MAX_PENDING_MESSAGES):
@@ -504,11 +504,12 @@ class TestQueries:
             submit_reverse_swap(timelock, submitter, rid=i + 1)
 
         assert len(pending_of(timelock)) == 3
-        assert [n for n, _ in pending_of(timelock)] == [1, 2, 3]
-        assert [n for n, _ in pending_of(timelock, start_after=1, limit=10)] == [2, 3]
+        assert [n for n, _ in pending_of(timelock)] == [0, 1, 2]
+        assert [n for n, _ in pending_of(timelock, start_after=0, limit=10)] == [0, 1, 2]
+        assert [n for n, _ in pending_of(timelock, start_after=1, limit=10)] == [2]
 
-        timelock.cancel(2, sender=canceller)
-        assert [n for n, _ in pending_of(timelock)] == [1, 3]
+        timelock.cancel(1, sender=canceller)
+        assert [n for n, _ in pending_of(timelock)] == [0, 2]
 
     def test_get_last_reverse_swap_message(self, timelock, submitter):
         view = timelock.getLastReverseSwapMessage(42)
@@ -516,7 +517,7 @@ class TestQueries:
 
         submit_reverse_swap(timelock, submitter, rid=42)
         view = timelock.getLastReverseSwapMessage(42)
-        assert view["nonce"] == 1
+        assert view["nonce"] == 0  # first submitted message has nonce 0
         assert view["message"]["id"] == 42
 
     def test_get_last_refund_message(self, timelock, submitter):
@@ -525,5 +526,5 @@ class TestQueries:
 
         submit_refund(timelock, submitter, id=42)
         view = timelock.getLastRefundMessage(42)
-        assert view["nonce"] == 1
+        assert view["nonce"] == 0  # first submitted message has nonce 0
         assert view["message"]["id"] == 42

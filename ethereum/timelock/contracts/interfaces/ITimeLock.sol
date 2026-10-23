@@ -129,15 +129,22 @@ interface ITimeLock {
     function nextExecuteNonce() external view returns (uint64);
     function nPendingMessages() external view returns (uint64);
     function pausedSinceTimestamp() external view returns (uint64);
-    function lastReverseSwapNonce(uint64 rid) external view returns (uint64);
-    function lastRefundNonce(uint64 id) external view returns (uint64);
+
+    /// @notice rid -> (nonce of the last submitted ReverseSwap with that rid) + 1;
+    ///         0 = none submitted (nonces are 0-based).
+    function reverseSwapIdToNonce(uint64 rid) external view returns (uint64);
+
+    /// @notice id -> (nonce of the last submitted Refund/RefundInFull with that id) + 1;
+    ///         0 = none submitted (nonces are 0-based).
+    function refundSwapIdToNonce(uint64 id) external view returns (uint64);
 
     function getMessage(uint64 nonce) external view returns (Message memory);
 
     /// @notice Pending messages in execution order, starting from the next one to execute
     ///         (mirror of the CosmWasm `PendingMessages` query).
     /// @param startAfter - return messages with nonce strictly greater than this;
-    ///                      values below `nextExecuteNonce` are clamped to it
+    ///                     `0` = no bound (from the next one to execute); values below
+    ///                     `nextExecuteNonce` are clamped to it
     /// @param limit - max number of returned messages
     function getPendingMessages(uint64 startAfter, uint32 limit)
         external
@@ -145,11 +152,13 @@ interface ITimeLock {
         returns (MessageView[] memory);
 
     /// @notice The last submitted reverse swap message with the given `rid`.
-    ///         `nonce == 0` = no message with that rid (mirror of `LastReverseSwapMessage`).
+    ///         `nonce == 0` AND empty message = no message with that rid
+    ///         (mirror of `LastReverseSwapMessage`).
     function getLastReverseSwapMessage(uint64 rid) external view returns (MessageView memory);
 
     /// @notice The last submitted refund/refund-in-full message with the given `id`.
-    ///         `nonce == 0` = no message with that id (mirror of `LastRefundMessage`).
+    ///         `nonce == 0` AND empty message = no message with that id
+    ///         (mirror of `LastRefundMessage`).
     function getLastRefundMessage(uint64 id) external view returns (MessageView memory);
 
     // -----     SUBMIT API (SUBMIT_ROLE)     -----------------------------------
