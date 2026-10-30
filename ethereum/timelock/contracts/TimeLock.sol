@@ -37,8 +37,9 @@ import "./interfaces/ITimeLock.sol";
  *
  * @dev Mapping from the CosmWasm contract:
  *      - `SUBMIT_ROLE` / `EXECUTE_ROLE` / `CANCEL_ROLE` -> same names, OZ AccessControl roles.
- *      - Pausing by block height (`paused_since_block`) -> pausing by `block.timestamp`
- *        (`pausedSinceTimestamp`), since the lock delays are measured in seconds.
+ *      - Lock delays & pausing are measured by block height (`block.number`): the
+ *        `execution_time`/`lock_delay` seconds and `paused_since_block` height of the
+ *        CosmWasm twin are unified into one block-height clock on the EVM side.
  *      - `StateUpdate` with `Option` fields -> `updateState(...)`, where the zero value
  *        of a parameter means "keep the current one".
  *      - Queue nonces start at 0 (CosmWasm parity); nonces are strictly increasing and
@@ -60,9 +61,9 @@ contract TimeLock is ITimeLock, AccessControl {
 
     /// @notice Bridge contract this TimeLock fronts.
     IBridgeRelayer public bridge;
-    /// @notice Lock delay [s] applied to `reverseSwap` submissions.
+    /// @notice Lock delay [blocks] applied to `reverseSwap` submissions.
     uint64 public reverseSwapLockDelay;
-    /// @notice Lock delay [s] applied to `refund` / `refundInFull` submissions.
+    /// @notice Lock delay [blocks] applied to `refund` / `refundInFull` submissions.
     uint64 public refundLockDelay;
     /// @notice Max number of pending messages; further submits are rejected.
     uint64 public nMaxPendingMessages;
@@ -86,14 +87,14 @@ contract TimeLock is ITimeLock, AccessControl {
     ///         (same as on the CosmWasm side). Stores nonce + 1 because nonces are 0-based.
     mapping(uint64 id => uint64 noncePlusOne) public refundSwapIdToNonce;
 
-    /// @notice Block timestamp since which the contract is paused
+    /// @notice Block height since which the contract is paused
     ///         (`type(uint64).max` = not paused).
-    uint64 public pausedSinceTimestamp;
+    uint64 public pausedSinceBlock;
 
     // -----     MODIFIERS     --------------------------------------------------
 
     modifier notPaused() {
-        if (pausedSinceTimestamp <= block.timestamp) revert ContractIsPaused();
+        if (pausedSinceBlock <= block.number) revert ContractIsPaused();
         _;
     }
 
@@ -125,7 +126,7 @@ contract TimeLock is ITimeLock, AccessControl {
         reverseSwapLockDelay = reverseSwapLockDelay_;
         refundLockDelay = refundLockDelay_;
         nMaxPendingMessages = nMaxPendingMessages_;
-        pausedSinceTimestamp = type(uint64).max;
+        pausedSinceBlock = type(uint64).max;
     }
 
     // -----     SUBMIT API (SUBMIT_ROLE)     -----------------------------------
@@ -151,7 +152,7 @@ contract TimeLock is ITimeLock, AccessControl {
             Message({
                 kind: MsgKind.ReverseSwap,
                 state: ExecutionState.Pending,
-                executionTime: _lockTime(reverseSwapLockDelay),
+                executionBlock: _lockBlock(reverseSwapLockDelay),
                 relayEon: relayEon_,
                 id: rid,
                 amount: amount,
@@ -181,7 +182,7 @@ contract TimeLock is ITimeLock, AccessControl {
             Message({
                 kind: MsgKind.Refund,
                 state: ExecutionState.Pending,
-                executionTime: _lockTime(refundLockDelay),
+                executionBlock: _lockBlock(refundLockDelay),
                 relayEon: relayEon_,
                 id: id,
                 amount: amount,
@@ -211,7 +212,7 @@ contract TimeLock is ITimeLock, AccessControl {
             Message({
                 kind: MsgKind.RefundInFull,
                 state: ExecutionState.Pending,
-                executionTime: _lockTime(refundLockDelay),
+                executionBlock: _lockBlock(refundLockDelay),
                 relayEon: relayEon_,
                 id: id,
                 amount: amount,
@@ -233,7 +234,7 @@ contract TimeLock is ITimeLock, AccessControl {
     function newRelayEon() external onlyRole(SUBMIT_ROLE) notPaused {
         _cancelAll();
         uint64 nonce = _pushNewRelayEon();
-        _dispatch(nonce, uint64(block.timestamp));
+        _dispatch(nonce, uint64(block.number));
     }
 
     // -----     EXECUTE / CANCEL API     ---------------------------------------
@@ -244,7 +245,7 @@ contract TimeLock is ITimeLock, AccessControl {
      *         marked `Failed` and the reason is emitted in the `MessageFailed` event.
      */
     function execute(uint64 nonce) external onlyRole(EXECUTE_ROLE) notPaused {
-        _dispatch(nonce, uint64(block.timestamp));
+        _dispatch(nonce, uint64(block.number));
     }
 
     /**
@@ -280,13 +281,13 @@ contract TimeLock is ITimeLock, AccessControl {
         );
     }
 
-    function pauseSince(uint64 sinceTimestamp) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        pausedSinceTimestamp = sinceTimestamp;
-        emit PausedSince(sinceTimestamp);
+    function pauseSince(uint64 sinceBlock) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        pausedSinceBlock = sinceBlock;
+        emit PausedSince(sinceBlock);
     }
 
     function resume() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        pausedSinceTimestamp = type(uint64).max;
+        pausedSinceBlock = type(uint64).max;
         emit Resumed();
     }
 
@@ -355,13 +356,13 @@ contract TimeLock is ITimeLock, AccessControl {
 
     // -----     INTERNAL: SUBMIT     --------------------------------------------
 
-    /// @dev Earliest execution timestamp for a message submitted now with `delay`.
-    function _lockTime(uint64 delay) private view returns (uint64) {
+    /// @dev Earliest execution block height for a message submitted now with `delay`.
+    function _lockBlock(uint64 delay) private view returns (uint64) {
         // NOTE(pb): Mirror of the CosmWasm `execution_time_overflow_error`:
-        //  `block.timestamp + delay` can not realistically overflow uint64, still
+        //  `block.number + delay` can not realistically overflow uint64, still
         //  keeping the explicit check for completeness.
-        if (block.timestamp > type(uint64).max - delay) revert ExecutionTimeOverflow();
-        return uint64(block.timestamp) + delay;
+        if (block.number > type(uint64).max - delay) revert ExecutionBlockOverflow();
+        return uint64(block.number) + delay;
     }
 
     /// @dev Pushes `m` into the queue and returns the allocated nonce.
@@ -392,7 +393,7 @@ contract TimeLock is ITimeLock, AccessControl {
         _messages[nonce] = m;
         nPendingMessages += 1;
 
-        emit MessageSubmitted(nonce, m.kind, msg.sender, m.executionTime, m.id);
+        emit MessageSubmitted(nonce, m.kind, msg.sender, m.executionBlock, m.id);
 
         return nonce + 1;
     }
@@ -408,7 +409,7 @@ contract TimeLock is ITimeLock, AccessControl {
         _messages[nonce] = Message({
             kind: MsgKind.NewRelayEon,
             state: ExecutionState.Pending,
-            executionTime: uint64(block.timestamp),
+            executionBlock: uint64(block.number),
             relayEon: 0,
             id: 0,
             amount: 0,
@@ -418,7 +419,7 @@ contract TimeLock is ITimeLock, AccessControl {
         });
         nPendingMessages += 1;
 
-        emit MessageSubmitted(nonce, MsgKind.NewRelayEon, msg.sender, uint64(block.timestamp), 0);
+        emit MessageSubmitted(nonce, MsgKind.NewRelayEon, msg.sender, uint64(block.number), 0);
     }
 
     // -----     INTERNAL: EXECUTE / CANCEL     ---------------------------------
@@ -431,7 +432,7 @@ contract TimeLock is ITimeLock, AccessControl {
         }
         Message storage m = _messages[nonce];
         if (m.state != ExecutionState.Pending) revert MessageNotPending(nonce);
-        if (now < m.executionTime) revert MessageNotMature(nonce, m.executionTime);
+        if (now < m.executionBlock) revert MessageNotMature(nonce, m.executionBlock);
 
         _advance(nonce + 1);
 
@@ -531,7 +532,7 @@ contract TimeLock is ITimeLock, AccessControl {
         return Message({
             kind: MsgKind.NewRelayEon,
             state: ExecutionState.Pending,
-            executionTime: 0,
+            executionBlock: 0,
             relayEon: 0,
             id: 0,
             amount: 0,

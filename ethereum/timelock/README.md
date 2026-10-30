@@ -26,12 +26,13 @@ Key mappings from the CosmWasm counterpart (see the contract natspec for details
 | CosmWasm `contract-timelock` | EVM `TimeLock` |
 |---|---|
 | `SUBMIT_ROLE` / `EXECUTE_ROLE` / `CANCEL_ROLE` | same (OpenZeppelin `AccessControl`) |
-| pausing by block height | pausing by `block.timestamp` (`pauseSince`/`resume`) |
+| pausing by block height | pausing by block height (`pauseSince`/`resume`) |
+| lock delays in seconds (`block.time`) | lock delays in blocks (`block.number`) |
 | `StateUpdate` with `Option` fields | `updateState(...)` - zero value keeps the current one |
 | `NewRelayEon` (cancel-all + immediate dispatch) | `newRelayEon()` |
 | `PendingMessages` / `LastReverseSwapMessage` / `LastRefundMessage` queries | `getPendingMessages` / `getLastReverseSwapMessage` / `getLastRefundMessage` |
 | per-index message history (`ReverseSwapMessages`, `RefundMessages`) | reconstructable off-chain from `MessageSubmitted(nonce, kind, ..., id)` events |
-| queue nonces start at 0 | queue nonces start at 1 (`0` = "no message" in the index mappings) |
+| queue nonces start at 0 | queue nonces start at 0; the id->nonce index mappings store nonce + 1 (`0` = "no message") |
 
 ## Layout
 

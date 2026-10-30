@@ -48,7 +48,7 @@ interface ITimeLock {
     struct Message {
         MsgKind kind;
         ExecutionState state;
-        uint64 executionTime;  // earliest block.timestamp the message can be executed
+        uint64 executionBlock; // earliest block height the message can be executed at
         uint64 relayEon;
         uint64 id;             // rid (ReverseSwap) or swap id (Refund/RefundInFull), 0 for NewRelayEon
         uint256 amount;
@@ -71,13 +71,13 @@ interface ITimeLock {
     error ZeroMaxPendingMessages();
     error ContractIsPaused();
     error TooManyPendingMessages(uint64 nMaxPendingMessages);
-    error ExecutionTimeOverflow();
+    error ExecutionBlockOverflow();
     error NonceOverflow();
     error MessageAlreadySubmitted(uint64 nonce);
     error MessageNotFound(uint64 nonce);
     error MessageNotPending(uint64 nonce);
     error MessageNotNext(uint64 nonce, uint64 expected);
-    error MessageNotMature(uint64 nonce, uint64 executionTime);
+    error MessageNotMature(uint64 nonce, uint64 executionBlock);
 
     // -----     EVENTS     -----------------------------------------------------
 
@@ -90,7 +90,7 @@ interface ITimeLock {
     );
 
     /// @dev Mirror of the CosmWasm `ContractPausedEvent`.
-    event PausedSince(uint64 sinceTimestamp);
+    event PausedSince(uint64 sinceBlock);
 
     /// @dev Mirror of the CosmWasm `ContractResumedEvent`.
     event Resumed();
@@ -103,7 +103,7 @@ interface ITimeLock {
         uint64 indexed nonce,
         MsgKind indexed kind,
         address indexed submitter,
-        uint64 executionTime,
+        uint64 executionBlock,
         uint64 id
     );
 
@@ -128,7 +128,7 @@ interface ITimeLock {
     function nextSubmitNonce() external view returns (uint64);
     function nextExecuteNonce() external view returns (uint64);
     function nPendingMessages() external view returns (uint64);
-    function pausedSinceTimestamp() external view returns (uint64);
+    function pausedSinceBlock() external view returns (uint64);
 
     /// @notice rid -> (nonce of the last submitted ReverseSwap with that rid) + 1;
     ///         0 = none submitted (nonces are 0-based).
@@ -198,7 +198,7 @@ interface ITimeLock {
         uint64 nMaxPendingMessages_
     ) external;
 
-    function pauseSince(uint64 sinceTimestamp) external;
+    function pauseSince(uint64 sinceBlock) external;
 
     function resume() external;
 }

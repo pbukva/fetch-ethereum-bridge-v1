@@ -95,10 +95,9 @@ def timelock(owner, bridge_mock, submitter, executor, canceller):
 # ----     HELPERS     -----------------------------------------------------------------
 # --------------------------------------------------------------------------------------
 
-def travel(seconds: int):
-    """Advance the chain timestamp by `seconds` (mines an empty block)."""
-    chain.pending_timestamp += seconds
-    chain.mine(1)
+def travel(blocks: int):
+    """Advance the chain height by `blocks` (mines empty blocks)."""
+    chain.mine(blocks)
 
 
 def submit_reverse_swap(tl, submitter, rid=1, to=None, sender_str="fetch1origin",
@@ -119,11 +118,11 @@ def submit_refund_in_full(tl, submitter, id=1, to=None, amount=100, relay_eon=0)
     return tl.submitRefundInFull(id, to, amount, relay_eon, sender=submitter)
 
 
-def assert_message(actual, kind, state, execution_time, relay_eon, id, amount, to,
+def assert_message(actual, kind, state, execution_block, relay_eon, id, amount, to,
                    sender, tx_hash):
     assert actual["kind"] == kind
     assert actual["state"] == state
-    assert actual["executionTime"] == execution_time
+    assert actual["executionBlock"] == execution_block
     assert actual["relayEon"] == relay_eon
     assert actual["id"] == id
     assert actual["amount"] == amount
@@ -157,7 +156,7 @@ class TestInitialization:
         assert timelock.nextSubmitNonce() == 0
         assert timelock.nextExecuteNonce() == 0
         assert timelock.nPendingMessages() == 0
-        assert timelock.pausedSinceTimestamp() == MAX_UINT64  # not paused
+        assert timelock.pausedSinceBlock() == MAX_UINT64  # not paused
         assert timelock.hasRole(ADMIN_ROLE, owner.address)
 
     def test_reverts_on_invalid_input(self, owner, bridge_mock):
@@ -204,7 +203,7 @@ class TestSubmit:
         assert_message(
             timelock.getMessage(0),
             kind=KIND_REVERSE_SWAP, state=STATE_PENDING,
-            execution_time=tx.timestamp + REVERSE_SWAP_LOCK_DELAY,
+            execution_block=tx.block_number + REVERSE_SWAP_LOCK_DELAY,
             relay_eon=0, id=1, amount=100, to=submitter.address,
             sender="fetch1origin", tx_hash=TX_HASH,
         )
@@ -219,7 +218,7 @@ class TestSubmit:
         assert_message(
             timelock.getMessage(0),
             kind=KIND_REFUND, state=STATE_PENDING,
-            execution_time=tx.timestamp + REFUND_LOCK_DELAY,
+            execution_block=tx.block_number + REFUND_LOCK_DELAY,
             relay_eon=0, id=1, amount=100, to=submitter.address,
             sender="", tx_hash=b"\x00" * 32,
         )
@@ -429,10 +428,10 @@ class TestPausing:
         submit_reverse_swap(timelock, submitter)  # works again
         assert timelock.nPendingMessages() == 1
 
-    def test_pause_since_future_timestamp(self, timelock, owner, submitter):
-        since = chain.pending_timestamp + 100
+    def test_pause_since_future_block(self, timelock, owner, submitter):
+        since = chain.blocks.head.number + 100
         timelock.pauseSince(since, sender=owner)
-        assert timelock.pausedSinceTimestamp() == since
+        assert timelock.pausedSinceBlock() == since
 
         submit_reverse_swap(timelock, submitter)  # not yet paused
         travel(101)
