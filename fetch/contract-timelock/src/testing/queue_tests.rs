@@ -3,6 +3,7 @@ use cosmwasm_std::{
     Addr, Binary, CosmosMsg, Deps, DepsMut, OwnedDeps, ReplyOn, SubMsgResult, Uint128, WasmMsg,
 };
 
+use crate::bridge::BridgeState;
 use crate::contract::msg::{
     ExecuteMsg, LastMessageResponse, MessageResponse, MessagesResponse, NPendingMessagesResponse,
     PendingMessagesResponse, QueryMsg,
@@ -12,7 +13,7 @@ use crate::queue::{BridgeMessage, ExecutionState};
 use crate::state::StateUpdate;
 use crate::testing::helpers::{
     event_names, execute_contract, execute_contract_at, init_state, ok_result, query_contract,
-    reply_contract, setup_with_roles,
+    reply_contract, setup_with_roles, MockBridge,
 };
 
 fn height() -> u64 {
@@ -577,4 +578,126 @@ fn new_relay_eon_cancels_pending_and_executes_immediately() {
     assert_eq!(query_message(deps.as_ref(), 4).unwrap().state, Cancelled);
     assert_eq!(query_message(deps.as_ref(), 5).unwrap().state, Failed);
     assert_eq!(query_n_pending(deps.as_ref()), 0);
+}
+
+#[test]
+fn submit_requires_bridge_to_accept() {
+    let (mut deps, actors) = setup_with_roles();
+    let accepting = MockBridge::default();
+    let bridge_state = accepting.state.clone();
+    // Paused before a refund matures
+    let paused_since = height() + init_state(&deps.api).refund_lock_delay;
+    let with_state = |state| MockBridge {
+        state,
+        ..accepting.clone()
+    };
+
+    let rejected = [
+        (
+            MockBridge {
+                is_relayer: false,
+                ..accepting.clone()
+            },
+            reverse_swap(1),
+            "relayer role",
+        ),
+        (
+            with_state(BridgeState {
+                paused_since_block_relayer_api: paused_since,
+                ..bridge_state.clone()
+            }),
+            refund_id(1),
+            "paused",
+        ),
+        (
+            with_state(BridgeState {
+                relay_eon: 1,
+                ..bridge_state.clone()
+            }),
+            reverse_swap(1),
+            "relay eon",
+        ),
+        (
+            with_state(BridgeState {
+                reverse_aggregated_allowance: Uint128::new(99),
+                ..bridge_state.clone()
+            }),
+            refund_id(1),
+            "allowance",
+        ),
+        (
+            with_state(BridgeState {
+                supply: Uint128::new(99),
+                ..bridge_state.clone()
+            }),
+            reverse_swap(1),
+            "supply",
+        ),
+        (
+            with_state(BridgeState {
+                next_swap_id: 1,
+                ..bridge_state.clone()
+            }),
+            refund_id(1),
+            "does not exist",
+        ),
+        (
+            MockBridge {
+                refunded: vec![1],
+                ..accepting.clone()
+            },
+            refund_id(1),
+            "already refunded",
+        ),
+    ];
+    for (bridge, msg, error) in rejected {
+        bridge.install(&mut deps.querier);
+        let result = execute_contract(deps.as_mut(), &actors.submitter, msg);
+        assert!(result.unwrap_err().to_string().contains(error), "{error}");
+    }
+    assert_eq!(query_message(deps.as_ref(), 0), None);
+
+    // A reverse swap matures before the pause, refund ids do not apply to it
+    MockBridge {
+        state: BridgeState {
+            paused_since_block_relayer_api: paused_since,
+            ..bridge_state
+        },
+        refunded: vec![1],
+        ..accepting
+    }
+    .install(&mut deps.querier);
+    execute_contract(deps.as_mut(), &actors.submitter, reverse_swap(1)).unwrap();
+    assert!(execute_contract(deps.as_mut(), &actors.submitter, refund_id(2)).is_err());
+}
+
+#[test]
+fn new_relay_eon_requires_bridge_to_accept() {
+    let (mut deps, actors) = setup_with_roles();
+    execute_contract(deps.as_mut(), &actors.submitter, refund_id(0)).unwrap();
+    let paused_since = |block| MockBridge {
+        state: BridgeState {
+            paused_since_block_relayer_api: block,
+            ..MockBridge::default().state
+        },
+        ..MockBridge::default()
+    };
+
+    let not_relayer = MockBridge {
+        is_relayer: false,
+        ..MockBridge::default()
+    };
+    for bridge in [not_relayer, paused_since(height())] {
+        bridge.install(&mut deps.querier);
+        assert!(
+            execute_contract(deps.as_mut(), &actors.submitter, ExecuteMsg::NewRelayEon {}).is_err()
+        );
+    }
+    // Nothing cancelled
+    assert_eq!(query_pending(deps.as_ref(), None, None), vec![0]);
+
+    // Executed at the current block
+    paused_since(height() + 1).install(&mut deps.querier);
+    execute_contract(deps.as_mut(), &actors.submitter, ExecuteMsg::NewRelayEon {}).unwrap();
+    assert!(query_pending(deps.as_ref(), None, None).is_empty());
 }

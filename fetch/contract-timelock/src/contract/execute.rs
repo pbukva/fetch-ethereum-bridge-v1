@@ -1,3 +1,4 @@
+use crate::bridge::verify_bridge_accepts;
 use crate::contract::msg::ExecuteMsg;
 use crate::error::{execution_height_overflow_error, too_many_pending_messages_error};
 use crate::queue::NonceType;
@@ -116,6 +117,13 @@ pub fn execute_submit(
         .height
         .checked_add(payload.lock_delay(&state))
         .ok_or_else(execution_height_overflow_error)?;
+    verify_bridge_accepts(
+        &deps.querier,
+        &state.bridge_addr,
+        &env.contract.address,
+        &payload,
+        execution_height,
+    )?;
     let nonce = MessageQueue::push(
         deps.storage,
         &mut response_handler,
@@ -136,10 +144,20 @@ pub fn execute_new_relay_eon(deps: DepsMut, env: Env, info: MessageInfo) -> StdR
     ensure_not_paused(deps.storage, &env)?;
     let mut response_handler = ResponseHandler::default();
     let height = env.block.height;
+    let payload = BridgeMessagePayload::NewRelayEon {};
+
+    // Before cancelling anything
+    let state = State::load(deps.storage)?;
+    verify_bridge_accepts(
+        &deps.querier,
+        &state.bridge_addr,
+        &env.contract.address,
+        &payload,
+        height,
+    )?;
 
     // Not limited by `n_max_pending_messages`, no other message stays pending
     MessageQueue::cancel_all(deps.storage, &mut response_handler)?;
-    let payload = BridgeMessagePayload::NewRelayEon {};
     let nonce = MessageQueue::push(deps.storage, &mut response_handler, payload, height)?;
     dispatch(deps, &mut response_handler, nonce, height)?;
 

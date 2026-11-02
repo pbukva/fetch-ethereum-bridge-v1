@@ -1,3 +1,4 @@
+mod bridge;
 pub mod contract;
 mod error;
 mod queue;

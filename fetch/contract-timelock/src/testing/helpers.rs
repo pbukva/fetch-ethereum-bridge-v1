@@ -2,12 +2,14 @@ use cosmwasm_std::testing::{
     message_info, mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage,
 };
 use cosmwasm_std::{
-    from_json, Addr, Binary, Deps, DepsMut, Env, OwnedDeps, Reply, Response, StdResult,
-    SubMsgResponse, SubMsgResult,
+    from_json, to_json_binary, Addr, Binary, ContractResult, Deps, DepsMut, Env, OwnedDeps, Reply,
+    Response, StdResult, SubMsgResponse, SubMsgResult, SystemError, SystemResult, Uint128,
+    WasmQuery,
 };
 use cw_fetch_std::access_control::DEFAULT_ADMIN_ROLE;
 use serde::de::DeserializeOwned;
 
+use crate::bridge::{refunds_key, BridgeQueryMsg, BridgeState, RoleResponse, RELAYER_ROLE};
 use crate::contract::execute::execute;
 use crate::contract::instantiate::instantiate;
 use crate::contract::msg::{ExecuteMsg, InitRoles, InstantiateMsg, QueryMsg};
@@ -77,7 +79,65 @@ pub fn setup_with_roles() -> (OwnedDeps<MockStorage, MockApi, MockQuerier>, Acto
         ..init_msg(&deps.api, &actors.admin)
     };
     instantiate_contract(deps.as_mut(), &actors.admin, &msg).unwrap();
+    MockBridge::default().install(&mut deps.querier);
     (deps, actors)
+}
+
+/// Answers the bridge's queries of [`crate::bridge`].
+#[derive(Clone)]
+pub struct MockBridge {
+    pub state: BridgeState,
+    /// Whether this contract has the bridge's relayer role
+    pub is_relayer: bool,
+    pub refunded: Vec<u64>,
+}
+
+impl Default for MockBridge {
+    /// Accepts the messages of the tests.
+    fn default() -> Self {
+        Self {
+            state: BridgeState {
+                supply: Uint128::new(1_000_000),
+                next_swap_id: 1_000,
+                relay_eon: 0,
+                reverse_aggregated_allowance: Uint128::new(1_000_000),
+                paused_since_block_relayer_api: u64::MAX,
+            },
+            is_relayer: true,
+            refunded: vec![],
+        }
+    }
+}
+
+impl MockBridge {
+    pub fn install(self, querier: &mut MockQuerier) {
+        let bridge = MockApi::default().addr_make("bridge").into_string();
+        let relayer = mock_env().contract.address;
+        querier.update_wasm(move |query| match query {
+            WasmQuery::Smart { contract_addr, msg } if *contract_addr == bridge => {
+                let response = match from_json(msg).unwrap() {
+                    BridgeQueryMsg::HasRole { role, address } => to_json_binary(&RoleResponse {
+                        has_role: self.is_relayer && role == RELAYER_ROLE && address == relayer,
+                    }),
+                    BridgeQueryMsg::FullState {} => to_json_binary(&self.state),
+                };
+                SystemResult::Ok(ContractResult::Ok(response.unwrap()))
+            }
+            WasmQuery::Raw { contract_addr, key } if *contract_addr == bridge => {
+                let refunded = self.refunded.iter().any(|&id| *key == refunds_key(id));
+                // Empty is a missing key
+                let value = if refunded {
+                    Binary::from([1])
+                } else {
+                    Binary::default()
+                };
+                SystemResult::Ok(ContractResult::Ok(value))
+            }
+            _ => SystemResult::Err(SystemError::UnsupportedRequest {
+                kind: format!("{query:?}"),
+            }),
+        });
+    }
 }
 
 pub fn env_at(height: u64) -> Env {
